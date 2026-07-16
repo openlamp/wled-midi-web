@@ -21,12 +21,17 @@ no CORS.
 > Running the file locally instead? The browser will block cross-origin requests to WLED — serve
 > it from the device, or use a proxy.
 
-## Scope (v1)
+## Modes
 
-Implements the **`lamp`** configuration of the unified syntax: notes 59–68 (looks, incl. black/white),
-48–56 (util), 73 (flash), CC 1–8, Program Change → preset. Commands are **coalesced into one
-`POST /json/state` per ~40 ms window** (per SPEC §7). One device (multi-channel routing, `strip`
-and `mpe` modes are on the roadmap).
+- **`lamp`** (control) — notes 59–68 (looks, incl. black/white), 48–56 (util), 73 (flash), CC 1–8
+  (bri/cct/hue/sat/fx/sx/ix/pal), Program Change → preset.
+- **`strip`** (position) — note → LED position, **polyphonic**, velocity → brightness, individual-LED
+  payload. Three position functions: **`interpolate`** (note range → strip, melodic/stage),
+  **`keymap`** (piano-aligned, LEDs-per-key), **`direct`** (note = LED index, sequencer). This is the
+  **piano-guide / strip-instrument** path.
+
+Commands are **coalesced into one `POST /json/state` per ~40 ms window** (per SPEC §7). One device
+today; multi-channel routing and `mpe` are on the roadmap. Untested on hardware yet.
 
 ## License
 

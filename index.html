@@ -29,6 +29,35 @@
   <p style="margin:.6rem 0 0"><button id="enable">Enable MIDI</button> <button id="clear">Clear log</button></p>
 </fieldset>
 
+<fieldset>
+  <label>Mode</label>
+  <label style="font-weight:400"><input type="radio" name="mode" value="lamp" checked> <code>lamp</code> — control (notes → looks, CC → params)</label>
+  <label style="font-weight:400"><input type="radio" name="mode" value="strip"> <code>strip</code> — position (note → LED, piano/instrument)</label>
+
+  <div id="stripcfg" hidden style="margin-top:.6rem">
+    <label for="ledcount">LED count (strip length)</label>
+    <input id="ledcount" type="number" value="144" min="1">
+    <label for="posfn">Position function</label>
+    <select id="posfn">
+      <option value="interpolate">interpolate — note range spread across the strip (melodic / stage)</option>
+      <option value="keymap">keymap — piano-aligned (LEDs per key)</option>
+      <option value="direct">direct — note number = LED index (sequencer)</option>
+    </select>
+    <div class="fnrow" data-fn="interpolate">
+      <label>Note range lo → hi (interpolate)</label>
+      <input id="lo" type="number" value="48" style="width:48%"> <input id="hi" type="number" value="83" style="width:48%">
+    </div>
+    <div class="fnrow" data-fn="keymap" hidden>
+      <label for="lpk">LEDs per key (keymap) — dense strip: length ÷ 88 ≈ 1.6–2.5</label>
+      <input id="lpk" type="number" step="0.1" value="1.6" min="0.1">
+    </div>
+    <label for="firstnote">First note = LED 0 (keymap / direct) — 21 = piano A0</label>
+    <input id="firstnote" type="number" value="21">
+    <label for="stripcol">Colour</label>
+    <input id="stripcol" type="color" value="#ff6400">
+  </div>
+</fieldset>
+
 <div id="status">Idle.</div>
 <div id="log" aria-live="polite"></div>
 
@@ -59,8 +88,12 @@ let pending = null, timer = null;
 function merge(patch) {
   pending = pending || {};
   for (const k in patch) {
-    if (k === "seg" && pending.seg) Object.assign(pending.seg[0], patch.seg[0]);
-    else pending[k] = patch[k];
+    if (k === "seg" && pending.seg) {
+      const ps = pending.seg[0], np = patch.seg[0];
+      const combinedI = (ps.i || []).concat(np.i || []);   // accumulate individual-LED entries (polyphony)
+      Object.assign(ps, np);
+      if (combinedI.length) ps.i = combinedI;
+    } else pending[k] = patch[k];
   }
   if (!timer) timer = setTimeout(flush, 40);
 }
@@ -86,8 +119,45 @@ function hsvColour(ch) {
   return { seg:[{ col:[[Math.round(r*255), Math.round(g*255), Math.round(b*255)]] }] };
 }
 
+// ---- strip mode: note → LED position(s), polyphonic (SPEC §13) ----
+const held = {};                                       // note -> [led indices]
+const mode = () => document.querySelector('input[name="mode"]:checked').value;
+function stripLeds(note) {
+  const N = +$("ledcount").value, fn = $("posfn").value;
+  if (fn === "direct") { const i = note - (+$("firstnote").value); return (i >= 0 && i < N) ? [i] : []; }
+  if (fn === "keymap") {                                // piano-aligned: note → LED(s) above the key
+    const lpk = +$("lpk").value, first = +$("firstnote").value;
+    const center = Math.round((note - first) * lpk), span = Math.max(1, Math.round(lpk)), out = [];
+    for (let k = 0; k < span; k++) { const i = center + k; if (i >= 0 && i < N) out.push(i); }
+    return out;
+  }
+  const lo = +$("lo").value, hi = +$("hi").value;        // interpolate: note range → strip range
+  if (hi <= lo) return [];
+  const i = Math.round((note - lo) / (hi - lo) * (N - 1));
+  return (i >= 0 && i < N) ? [i] : [];
+}
+function stripOn(note, vel) {
+  const leds = stripLeds(note); if (!leds.length) return;
+  const h = $("stripcol").value, s = vel / 127;          // velocity → brightness
+  const col = [1, 3, 5].map(o => Math.round(parseInt(h.slice(o, o + 2), 16) * s));
+  held[note] = leds;
+  const i = []; for (const idx of leds) i.push(idx, col);
+  merge({ on: true, seg: [{ i }] });                     // individual-LED payload
+}
+function stripOff(note) {
+  const leds = held[note]; if (!leds) return; delete held[note];
+  const i = []; for (const idx of leds) i.push(idx, [0, 0, 0]);
+  merge({ seg: [{ i }] });
+}
+
 function onMIDI(e) {
   const [st, d1, d2] = e.data, type = st & 0xF0, ch = (st & 0x0F) + 1;
+  if (mode() === "strip") {
+    if (type === 0x90 && d2 > 0) stripOn(d1, d2);
+    else if (type === 0x80 || (type === 0x90 && d2 === 0)) stripOff(d1);
+    else if (type === 0xB0 && CC[d1] === "bri") merge({ bri: Math.round(d2 / 127 * 255) });
+    return;
+  }
   if (type === 0x90 && d2 > 0) {            // note on
     if (LOOKS[d1] !== undefined) { merge(lookPatch(d1)); if (d1 !== 59) lastBri = lastBri; }
     else if (UTIL[d1] !== undefined) {
@@ -140,4 +210,14 @@ $("enable").onclick = async () => {
   } catch (e) { status("MIDI blocked: " + e.message); log("✗ " + e.message + " (Chrome/Edge only; secure context required)", "warn"); }
 };
 $("clear").onclick = () => $("log").innerHTML = "";
+
+// show/hide strip config by mode + position function
+function syncUI() {
+  $("stripcfg").hidden = mode() !== "strip";
+  const fn = $("posfn").value;
+  document.querySelectorAll(".fnrow").forEach(r => r.hidden = r.dataset.fn !== fn);
+}
+document.querySelectorAll('input[name="mode"]').forEach(r => r.onchange = syncUI);
+$("posfn").onchange = syncUI;
+syncUI();
 </script>
