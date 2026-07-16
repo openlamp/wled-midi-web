@@ -30,8 +30,9 @@ no CORS.
   **`keymap`** (piano-aligned, LEDs-per-key), **`direct`** (note = LED index, sequencer). Note-off
   **fade** (configurable), and the note's **MIDI channel picks the colour** (Synthesia L/R hands).
   This is the **piano-guide / strip-instrument** path.
-- **`mpe`** (expressive) — MIDI channel = a per-note voice: pitch → base hue, channel pressure → brightness,
-  CC74 slide → saturation, pitch-bend → hue shift. A single device shows the last-expressed voice.
+- **`mpe`** (expressive voice-zones) — MIDI channel = a per-note voice placed as a **zone of LEDs at the
+  pitch position** on the strip (SPEC §13), **polyphonic**: pitch → position + base hue, channel pressure →
+  brightness, CC74 slide → saturation, pitch-bend → hue shift. Uses the same strip config as `strip`.
 
 Commands are **coalesced into one `POST /json/state` per ~40 ms window** (per SPEC §7). One device
 today (multi-channel routing on the roadmap). Untested on hardware yet.

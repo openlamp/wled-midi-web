@@ -33,7 +33,7 @@
   <label>Mode</label>
   <label style="font-weight:400"><input type="radio" name="mode" value="lamp" checked> <code>lamp</code> — control (notes → looks, CC → params)</label>
   <label style="font-weight:400"><input type="radio" name="mode" value="strip"> <code>strip</code> — position (note → LED, piano/instrument)</label>
-  <label style="font-weight:400"><input type="radio" name="mode" value="mpe"> <code>mpe</code> — expressive (per-note: pressure → bri, slide → sat, bend → hue)</label>
+  <label style="font-weight:400"><input type="radio" name="mode" value="mpe"> <code>mpe</code> — expressive voice-zones (pitch → LED zone, pressure → bri, slide → sat, bend → hue)</label>
 
   <div id="stripcfg" hidden style="margin-top:.6rem">
     <label for="ledcount">LED count (strip length)</label>
@@ -175,29 +175,44 @@ function fadeTick() {
   fadeRAF = fading.size ? requestAnimationFrame(fadeTick) : 0;
 }
 
-// ---- mpe mode: channel = per-note voice; single device shows the last-expressed voice ----
-const voices = {};                                     // channel → {base, hue, sat, bri}
+// ---- mpe mode: channel = per-note voice, placed as a ZONE of LEDs at the pitch position
+//      (SPEC §13 "MPE voice-zone"). Polyphonic: each voice lights its own zone, expressive
+//      colour per voice (pitch→hue, pressure→bri, CC74→sat, bend→hue shift). Uses the strip config.
+const voices = {};                                     // channel → {leds:[..], base, hue, sat, bri}
 const MPE_BEND_HUE = 0.5;                               // full pitch-bend = this much hue shift (0..1)
+const MPE_ZONE = 3;                                    // LEDs lit per voice (animated zone)
 function hsv2rgb(h, s, v) {
   h = ((h % 1) + 1) % 1;
   const i = Math.floor(h * 6), f = h * 6 - i, p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
   const m = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i % 6];
   return m.map(x => Math.round(x * 255));
 }
-function renderVoice(ch) {
+function voiceLeds(note) {                              // pitch → a small zone centred on the strip position
+  const anchor = stripLeds(note); if (!anchor.length) return [];
+  const N = +$("ledcount").value, c = anchor[0], half = Math.floor(MPE_ZONE / 2), out = [];
+  for (let k = -half; k <= half; k++) { const i = c + k; if (i >= 0 && i < N) out.push(i); }
+  return out;
+}
+function paintVoice(ch) {                               // colour the voice's zone; brightness folded into the pixels
+  const vo = voices[ch]; if (!vo || !vo.leds.length) return;
+  const col = hsv2rgb(vo.hue, vo.sat, 1).map(x => Math.round(x * vo.bri));
+  const i = []; for (const idx of vo.leds) i.push(idx, col);
+  merge({ on: true, seg: [{ i }] });
+}
+function clearVoice(ch) {                               // note-off: extinguish just this voice's zone
   const vo = voices[ch]; if (!vo) return;
-  const col = hsv2rgb(vo.hue, vo.sat, 1);
-  merge({ on: true, seg: [{ col: [col] }], bri: Math.round(vo.bri * 255) });
+  const i = []; for (const idx of vo.leds) i.push(idx, [0, 0, 0]);
+  merge({ seg: [{ i }] }); delete voices[ch];
 }
 
 function onMIDI(e) {
   const [st, d1, d2] = e.data, type = st & 0xF0, ch = (st & 0x0F) + 1;
   if (mode() === "mpe") {
-    if (type === 0x90 && d2 > 0) { const base = (d1 % 12) / 12; voices[ch] = { base, hue: base, sat: 1, bri: d2 / 127 }; renderVoice(ch); }
-    else if (type === 0x80 || (type === 0x90 && d2 === 0)) { delete voices[ch]; merge({ bri: 0 }); }
-    else if (type === 0xD0) { if (voices[ch]) { voices[ch].bri = d1 / 127; renderVoice(ch); } }   // channel pressure → brightness
-    else if (type === 0xB0 && d1 === 74) { if (voices[ch]) { voices[ch].sat = d2 / 127; renderVoice(ch); } } // CC74 slide → saturation
-    else if (type === 0xE0) { if (voices[ch]) { const bend = ((d2 << 7) | d1) - 8192; voices[ch].hue = voices[ch].base + (bend / 8192) * MPE_BEND_HUE; renderVoice(ch); } } // pitch bend → hue
+    if (type === 0x90 && d2 > 0) { const leds = voiceLeds(d1); if (!leds.length) return; const base = (d1 % 12) / 12; voices[ch] = { leds, base, hue: base, sat: 1, bri: d2 / 127 }; paintVoice(ch); }
+    else if (type === 0x80 || (type === 0x90 && d2 === 0)) clearVoice(ch);
+    else if (type === 0xD0) { if (voices[ch]) { voices[ch].bri = d1 / 127; paintVoice(ch); } }   // channel pressure → brightness
+    else if (type === 0xB0 && d1 === 74) { if (voices[ch]) { voices[ch].sat = d2 / 127; paintVoice(ch); } } // CC74 slide → saturation
+    else if (type === 0xE0) { if (voices[ch]) { const bend = ((d2 << 7) | d1) - 8192; voices[ch].hue = voices[ch].base + (bend / 8192) * MPE_BEND_HUE; paintVoice(ch); } } // pitch bend → hue
     return;
   }
   if (mode() === "strip") {
@@ -261,7 +276,7 @@ $("clear").onclick = () => $("log").innerHTML = "";
 
 // show/hide strip config by mode + position function
 function syncUI() {
-  $("stripcfg").hidden = mode() !== "strip";
+  $("stripcfg").hidden = (mode() !== "strip" && mode() !== "mpe");   // mpe positions voices on the strip too
   const fn = $("posfn").value;
   document.querySelectorAll(".fnrow").forEach(r => r.hidden = r.dataset.fn !== fn);
 }
