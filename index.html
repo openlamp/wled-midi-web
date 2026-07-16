@@ -93,11 +93,16 @@ let pending = null, timer = null;
 function merge(patch) {
   pending = pending || {};
   for (const k in patch) {
-    if (k === "seg" && pending.seg) {
-      const ps = pending.seg[0], np = patch.seg[0];
-      const combinedI = (ps.i || []).concat(np.i || []);   // accumulate individual-LED entries (polyphony)
-      Object.assign(ps, np);
-      if (combinedI.length) ps.i = combinedI;
+    if (k === "seg") {
+      pending.seg = pending.seg || [];
+      for (const np of patch.seg) {                        // coalesce per segment id (default 0)
+        const id = np.id ?? 0;
+        let ps = pending.seg.find(s => (s.id ?? 0) === id);
+        if (!ps) { ps = { id }; pending.seg.push(ps); }
+        const combinedI = (ps.i || []).concat(np.i || []); // accumulate individual-LED entries (polyphony)
+        Object.assign(ps, np);
+        if (combinedI.length) ps.i = combinedI;
+      }
     } else pending[k] = patch[k];
   }
   if (!timer) timer = setTimeout(flush, 40);
@@ -222,7 +227,7 @@ function onMIDI(e) {
     return;
   }
   if (type === 0x90 && d2 > 0) {            // note on
-    if (LOOKS[d1] !== undefined) { merge(lookPatch(d1)); if (d1 !== 59) lastBri = lastBri; }
+    if (LOOKS[d1] !== undefined) { const lp = lookPatch(d1); lp.seg[0].id = ch - 1; merge(lp); if (d1 !== 59) lastBri = lastBri; }  // channel → segment
     else if (UTIL[d1] !== undefined) {
       const u = UTIL[d1];
       if (u === "restore") merge({ bri: lastBri });
@@ -233,14 +238,15 @@ function onMIDI(e) {
     else log("· note " + d1 + " unmapped (ignored)");
   } else if (type === 0xB0) {               // control change
     const p = CC[d1]; if (!p) return;
-    if (p === "bri") { lastBri = Math.round(d2/127*255); merge({ bri: lastBri }); }
-    else if (p === "cct") merge({ seg:[{ cct: Math.round(d2/127*255) }] });
-    else if (p === "hue") { hue[ch] = d2/127; merge(hsvColour(ch)); }
-    else if (p === "sat") { sat[ch] = d2/127; merge(hsvColour(ch)); }
-    else if (p === "fx")  merge({ seg:[{ fx: Math.round(d2/127*(fxCount-1)) }] });
-    else if (p === "sx")  merge({ seg:[{ sx: Math.round(d2/127*255) }] });
-    else if (p === "ix")  merge({ seg:[{ ix: Math.round(d2/127*255) }] });
-    else if (p === "pal") merge({ seg:[{ pal: Math.round(d2/127*(palCount-1)) }] });
+    const sid = ch - 1;                      // channel → WLED segment id (ch1 → seg0)
+    if (p === "bri") { lastBri = Math.round(d2/127*255); merge({ bri: lastBri }); }   // bri is device-wide
+    else if (p === "cct") merge({ seg:[{ id: sid, cct: Math.round(d2/127*255) }] });
+    else if (p === "hue") { hue[ch] = d2/127; const hp = hsvColour(ch); hp.seg[0].id = sid; merge(hp); }
+    else if (p === "sat") { sat[ch] = d2/127; const hp = hsvColour(ch); hp.seg[0].id = sid; merge(hp); }
+    else if (p === "fx")  merge({ seg:[{ id: sid, fx: Math.round(d2/127*(fxCount-1)) }] });
+    else if (p === "sx")  merge({ seg:[{ id: sid, sx: Math.round(d2/127*255) }] });
+    else if (p === "ix")  merge({ seg:[{ id: sid, ix: Math.round(d2/127*255) }] });
+    else if (p === "pal") merge({ seg:[{ id: sid, pal: Math.round(d2/127*(palCount-1)) }] });
   } else if (type === 0xC0) {               // program change -> preset
     merge({ ps: d1 + 1 });
   }
