@@ -2,7 +2,7 @@
 
 **Drive a WLED device from any MIDI input, in the browser — no install, no server.**
 A reference implementation of the [wled-midi](https://github.com/openlamp/wled-midi) convention
-(`lamp` mode) as a single HTML file. Web MIDI → WLED's local JSON API.
+(`lamp` · `strip` · `mpe` modes) as a single HTML file. Web MIDI → WLED's local JSON API.
 
 ## Use
 
@@ -27,11 +27,14 @@ no CORS.
   (bri/cct/hue/sat/fx/sx/ix/pal), Program Change → preset.
 - **`strip`** (position) — note → LED position, **polyphonic**, velocity → brightness, individual-LED
   payload. Three position functions: **`interpolate`** (note range → strip, melodic/stage),
-  **`keymap`** (piano-aligned, LEDs-per-key), **`direct`** (note = LED index, sequencer). This is the
-  **piano-guide / strip-instrument** path.
+  **`keymap`** (piano-aligned, LEDs-per-key), **`direct`** (note = LED index, sequencer). Note-off
+  **fade** (configurable), and the note's **MIDI channel picks the colour** (Synthesia L/R hands).
+  This is the **piano-guide / strip-instrument** path.
+- **`mpe`** (expressive) — MIDI channel = a per-note voice: pitch → base hue, channel pressure → brightness,
+  CC74 slide → saturation, pitch-bend → hue shift. A single device shows the last-expressed voice.
 
 Commands are **coalesced into one `POST /json/state` per ~40 ms window** (per SPEC §7). One device
-today; multi-channel routing and `mpe` are on the roadmap. Untested on hardware yet.
+today (multi-channel routing on the roadmap). Untested on hardware yet.
 
 ## License
 

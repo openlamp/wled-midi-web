@@ -33,6 +33,7 @@
   <label>Mode</label>
   <label style="font-weight:400"><input type="radio" name="mode" value="lamp" checked> <code>lamp</code> — control (notes → looks, CC → params)</label>
   <label style="font-weight:400"><input type="radio" name="mode" value="strip"> <code>strip</code> — position (note → LED, piano/instrument)</label>
+  <label style="font-weight:400"><input type="radio" name="mode" value="mpe"> <code>mpe</code> — expressive (per-note: pressure → bri, slide → sat, bend → hue)</label>
 
   <div id="stripcfg" hidden style="margin-top:.6rem">
     <label for="ledcount">LED count (strip length)</label>
@@ -174,8 +175,31 @@ function fadeTick() {
   fadeRAF = fading.size ? requestAnimationFrame(fadeTick) : 0;
 }
 
+// ---- mpe mode: channel = per-note voice; single device shows the last-expressed voice ----
+const voices = {};                                     // channel → {base, hue, sat, bri}
+const MPE_BEND_HUE = 0.5;                               // full pitch-bend = this much hue shift (0..1)
+function hsv2rgb(h, s, v) {
+  h = ((h % 1) + 1) % 1;
+  const i = Math.floor(h * 6), f = h * 6 - i, p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+  const m = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i % 6];
+  return m.map(x => Math.round(x * 255));
+}
+function renderVoice(ch) {
+  const vo = voices[ch]; if (!vo) return;
+  const col = hsv2rgb(vo.hue, vo.sat, 1);
+  merge({ on: true, seg: [{ col: [col] }], bri: Math.round(vo.bri * 255) });
+}
+
 function onMIDI(e) {
   const [st, d1, d2] = e.data, type = st & 0xF0, ch = (st & 0x0F) + 1;
+  if (mode() === "mpe") {
+    if (type === 0x90 && d2 > 0) { const base = (d1 % 12) / 12; voices[ch] = { base, hue: base, sat: 1, bri: d2 / 127 }; renderVoice(ch); }
+    else if (type === 0x80 || (type === 0x90 && d2 === 0)) { delete voices[ch]; merge({ bri: 0 }); }
+    else if (type === 0xD0) { if (voices[ch]) { voices[ch].bri = d1 / 127; renderVoice(ch); } }   // channel pressure → brightness
+    else if (type === 0xB0 && d1 === 74) { if (voices[ch]) { voices[ch].sat = d2 / 127; renderVoice(ch); } } // CC74 slide → saturation
+    else if (type === 0xE0) { if (voices[ch]) { const bend = ((d2 << 7) | d1) - 8192; voices[ch].hue = voices[ch].base + (bend / 8192) * MPE_BEND_HUE; renderVoice(ch); } } // pitch bend → hue
+    return;
+  }
   if (mode() === "strip") {
     if (type === 0x90 && d2 > 0) stripOn(d1, d2, ch);
     else if (type === 0x80 || (type === 0x90 && d2 === 0)) stripOff(d1);
