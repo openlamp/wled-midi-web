@@ -1,0 +1,143 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wled-midi-web — drive WLED from MIDI in the browser</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; margin-bottom: .2rem; }
+  .sub { opacity: .7; margin-top: 0; }
+  fieldset { border: 1px solid #8884; border-radius: 8px; margin: 1rem 0; padding: .8rem 1rem; }
+  label { display: block; margin: .4rem 0 .1rem; font-weight: 600; }
+  input, select, button { font: inherit; padding: .4rem .6rem; border-radius: 6px; border: 1px solid #8886; background: transparent; color: inherit; }
+  input, select { width: 100%; box-sizing: border-box; }
+  button { cursor: pointer; font-weight: 600; }
+  #status { padding: .5rem .7rem; border-radius: 6px; background: #8882; }
+  #log { height: 220px; overflow: auto; font: 12px/1.4 ui-monospace, monospace; background: #0001; border-radius: 6px; padding: .5rem; white-space: pre-wrap; }
+  .warn { color: #c60; }
+  code { background: #8883; padding: 0 .25em; border-radius: 3px; }
+</style>
+
+<h1>wled-midi-web</h1>
+<p class="sub">Drive a WLED device from any MIDI input, in the browser — a reference implementation of the
+<a href="https://github.com/openlamp/wled-midi">wled-midi</a> convention (<code>lamp</code> mode). 100% local, no server.</p>
+
+<fieldset>
+  <label for="ip">WLED device IP</label>
+  <input id="ip" placeholder="192.168.1.50" value="">
+  <label for="port">MIDI input</label>
+  <select id="port"><option>— click “Enable MIDI” —</option></select>
+  <p style="margin:.6rem 0 0"><button id="enable">Enable MIDI</button> <button id="clear">Clear log</button></p>
+</fieldset>
+
+<div id="status">Idle.</div>
+<div id="log" aria-live="polite"></div>
+
+<p class="sub"><strong>Notes → looks</strong> (59 black · 60-66 hues · 67 white · 68 effect) · <strong>util</strong> (48 off, 50 on, 52 toggle, 53 blackout, 55 restore, 56 solid) · <strong>73</strong> flash · <strong>CC 1-8</strong> bri/cct/hue/sat/fx/sx/ix/pal · <strong>PC</strong> → preset. One device here (multi-channel routing is a later config).</p>
+<p class="sub warn" id="ctxwarn"></p>
+
+<script>
+const LOOKS = { // note -> [r,g,b] or "effect"  (wled-midi SPEC §4.1)
+  59:[0,0,0], 60:[255,0,0], 61:[255,85,0], 62:[255,200,0], 63:[0,255,0],
+  64:[0,200,255], 65:[0,0,255], 66:[255,0,170], 67:[255,255,255], 68:"effect" };
+const UTIL = { 48:{on:false}, 50:{on:true}, 52:{on:"t"}, 53:{bri:0}, 55:"restore", 56:{seg:[{fx:0}]} };
+const CC = { 1:"bri", 2:"cct", 3:"hue", 4:"sat", 5:"fx", 6:"sx", 7:"ix", 8:"pal" };
+
+let fxCount = 118, palCount = 71;      // from /json/info; fall back per SPEC §5
+let lastBri = 128;                     // for "restore"
+const hue = {}, sat = {};              // per-channel continuous colour (default sat 1)
+
+const $ = id => document.getElementById(id);
+const log = (m, cls="") => { const d = document.createElement("div"); if (cls) d.className = cls; d.textContent = m; $("log").prepend(d); };
+const status = m => $("status").textContent = m;
+
+// secure-context caveat (Web MIDI is blocked on plain http://<ip>)
+if (!window.isSecureContext) $("ctxwarn").textContent =
+  "⚠ Web MIDI needs a secure context. On plain http://<ip> it's blocked — open via https, localhost, or a reverse proxy (see the wled-midi tooling docs).";
+
+// ---- batching: coalesce a ~40 ms window into one POST /json/state (SPEC §7) ----
+let pending = null, timer = null;
+function merge(patch) {
+  pending = pending || {};
+  for (const k in patch) {
+    if (k === "seg" && pending.seg) Object.assign(pending.seg[0], patch.seg[0]);
+    else pending[k] = patch[k];
+  }
+  if (!timer) timer = setTimeout(flush, 40);
+}
+async function flush() {
+  timer = null; const body = pending; pending = null;
+  const ip = $("ip").value.trim(); if (!ip || !body) return;
+  try {
+    await fetch(`http://${ip}/json/state`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    log("→ " + JSON.stringify(body));
+  } catch (e) { log("✗ send failed: " + e.message + "  (CORS? serve this file from the WLED device, or use a proxy)", "warn"); }
+}
+
+// resolve a colour look, honouring the channel's current hue/sat if a raw colour isn't the point
+function lookPatch(note) {
+  const v = LOOKS[note];
+  if (v === "effect") return { seg:[{ fx: 1, sx: 128, ix: 128 }] };
+  return { seg:[{ col:[v], fx:0 }] };
+}
+function hsvColour(ch) {
+  const h = (hue[ch] ?? 0), s = (sat[ch] ?? 1);
+  const i = Math.floor(h*6), f = h*6 - i, p = 1-s, q = 1-f*s, t = 1-(1-f)*s;
+  const [r,g,b] = [[1,t,p],[q,1,p],[p,1,t],[p,q,1],[t,p,1],[1,p,q]][i%6];
+  return { seg:[{ col:[[Math.round(r*255), Math.round(g*255), Math.round(b*255)]] }] };
+}
+
+function onMIDI(e) {
+  const [st, d1, d2] = e.data, type = st & 0xF0, ch = (st & 0x0F) + 1;
+  if (type === 0x90 && d2 > 0) {            // note on
+    if (LOOKS[d1] !== undefined) { merge(lookPatch(d1)); if (d1 !== 59) lastBri = lastBri; }
+    else if (UTIL[d1] !== undefined) {
+      const u = UTIL[d1];
+      if (u === "restore") merge({ bri: lastBri });
+      else { if (d1 === 53) lastBri = lastBri; merge(u); }
+    }
+    else if (d1 === 73) { merge({ bri: 255 }); setTimeout(() => merge({ bri: lastBri }), 120); } // flash
+    else if (d1 === 72) log("· note 72 (beat) — needs a clock source, not in this v1", "warn");
+    else log("· note " + d1 + " unmapped (ignored)");
+  } else if (type === 0xB0) {               // control change
+    const p = CC[d1]; if (!p) return;
+    if (p === "bri") { lastBri = Math.round(d2/127*255); merge({ bri: lastBri }); }
+    else if (p === "cct") merge({ seg:[{ cct: Math.round(d2/127*255) }] });
+    else if (p === "hue") { hue[ch] = d2/127; merge(hsvColour(ch)); }
+    else if (p === "sat") { sat[ch] = d2/127; merge(hsvColour(ch)); }
+    else if (p === "fx")  merge({ seg:[{ fx: Math.round(d2/127*(fxCount-1)) }] });
+    else if (p === "sx")  merge({ seg:[{ sx: Math.round(d2/127*255) }] });
+    else if (p === "ix")  merge({ seg:[{ ix: Math.round(d2/127*255) }] });
+    else if (p === "pal") merge({ seg:[{ pal: Math.round(d2/127*(palCount-1)) }] });
+  } else if (type === 0xC0) {               // program change -> preset
+    merge({ ps: d1 + 1 });
+  }
+}
+
+let access = null;
+function bindPorts() {
+  const sel = $("port"); sel.innerHTML = "";
+  const inputs = [...access.inputs.values()];
+  if (!inputs.length) { sel.innerHTML = "<option>(no MIDI inputs found)</option>"; return; }
+  for (const inp of inputs) { const o = document.createElement("option"); o.value = inp.id; o.textContent = inp.name; sel.append(o); }
+  attach(sel.value);
+  sel.onchange = () => attach(sel.value);
+}
+function attach(id) {
+  for (const inp of access.inputs.values()) inp.onmidimessage = (inp.id === id) ? onMIDI : null;
+  const name = access.inputs.get(id)?.name || "?";
+  status("Listening on: " + name); log("● listening on " + name);
+}
+
+$("enable").onclick = async () => {
+  try {
+    access = await navigator.requestMIDIAccess({ sysex: false });
+    access.onstatechange = bindPorts; bindPorts();
+    // fetch fx/pal counts from the device
+    const ip = $("ip").value.trim();
+    if (ip) try { const r = await fetch(`http://${ip}/json/info`); const j = await r.json();
+      if (j.fxcount) fxCount = j.fxcount; if (j.palcount) palCount = j.palcount;
+      log(`ℹ device: ${j.name||"WLED"} — ${fxCount} fx, ${palCount} palettes`); } catch {}
+  } catch (e) { status("MIDI blocked: " + e.message); log("✗ " + e.message + " (Chrome/Edge only; secure context required)", "warn"); }
+};
+$("clear").onclick = () => $("log").innerHTML = "";
+</script>
