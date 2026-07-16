@@ -55,6 +55,8 @@
     <input id="firstnote" type="number" value="21">
     <label for="stripcol">Colour</label>
     <input id="stripcol" type="color" value="#ff6400">
+    <label for="fadems">Note-off fade (ms) — 0 = instant off</label>
+    <input id="fadems" type="number" value="250" min="0" step="10">
   </div>
 </fieldset>
 
@@ -120,7 +122,9 @@ function hsvColour(ch) {
 }
 
 // ---- strip mode: note → LED position(s), polyphonic (SPEC §13) ----
-const held = {};                                       // note -> [led indices]
+const held = {};                                       // note -> {leds:[..], col:[r,g,b]}
+const fading = new Map();                               // led index -> {col:[r,g,b], t0} ramping to black
+let fadeRAF = 0;
 const mode = () => document.querySelector('input[name="mode"]:checked').value;
 function stripLeds(note) {
   const N = +$("ledcount").value, fn = $("posfn").value;
@@ -140,14 +144,32 @@ function stripOn(note, vel) {
   const leds = stripLeds(note); if (!leds.length) return;
   const h = $("stripcol").value, s = vel / 127;          // velocity → brightness
   const col = [1, 3, 5].map(o => Math.round(parseInt(h.slice(o, o + 2), 16) * s));
-  held[note] = leds;
+  held[note] = { leds, col };
+  for (const idx of leds) fading.delete(idx);            // re-lit: cancel any in-flight fade
   const i = []; for (const idx of leds) i.push(idx, col);
   merge({ on: true, seg: [{ i }] });                     // individual-LED payload
 }
 function stripOff(note) {
-  const leds = held[note]; if (!leds) return; delete held[note];
-  const i = []; for (const idx of leds) i.push(idx, [0, 0, 0]);
-  merge({ seg: [{ i }] });
+  const e = held[note]; if (!e) return; delete held[note];
+  const ms = +$("fadems").value;
+  if (!(ms > 0)) {                                       // instant off
+    const i = []; for (const idx of e.leds) i.push(idx, [0, 0, 0]);
+    merge({ seg: [{ i }] });
+    return;
+  }
+  const t0 = performance.now();                          // hand pixels to the rAF fade
+  for (const idx of e.leds) fading.set(idx, { col: e.col, t0 });
+  if (!fadeRAF) fadeRAF = requestAnimationFrame(fadeTick);
+}
+function fadeTick() {
+  const ms = +$("fadems").value || 1, now = performance.now(), i = [];
+  for (const [idx, st] of fading) {
+    const k = 1 - (now - st.t0) / ms;                    // linear ramp 1 → 0
+    if (k <= 0) { i.push(idx, [0, 0, 0]); fading.delete(idx); }
+    else { const c = st.col; i.push(idx, [Math.round(c[0] * k), Math.round(c[1] * k), Math.round(c[2] * k)]); }
+  }
+  if (i.length) merge({ seg: [{ i }] });                 // one batched write per frame
+  fadeRAF = fading.size ? requestAnimationFrame(fadeTick) : 0;
 }
 
 function onMIDI(e) {
