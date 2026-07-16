@@ -129,7 +129,7 @@ const mode = () => document.querySelector('input[name="mode"]:checked').value;
 function stripLeds(note) {
   const N = +$("ledcount").value, fn = $("posfn").value;
   if (fn === "direct") { const i = note - (+$("firstnote").value); return (i >= 0 && i < N) ? [i] : []; }
-  if (fn === "keymap") {                                // piano-aligned: note → LED(s) above the key
+  if (fn === "keymap") {                                // piano-aligned (LEDs-per-key, per onlaj/Piano-LED-Visualizer)
     const lpk = +$("lpk").value, first = +$("firstnote").value;
     const center = Math.round((note - first) * lpk), span = Math.max(1, Math.round(lpk)), out = [];
     for (let k = 0; k < span; k++) { const i = center + k; if (i >= 0 && i < N) out.push(i); }
