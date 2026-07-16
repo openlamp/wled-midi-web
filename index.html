@@ -29,6 +29,35 @@
   <p style="margin:.6rem 0 0"><button id="enable">Enable MIDI</button> <button id="clear">Clear log</button></p>
 </fieldset>
 
+<fieldset>
+  <label>Mode</label>
+  <label style="font-weight:400"><input type="radio" name="mode" value="lamp" checked> <code>lamp</code> — control (notes → looks, CC → params)</label>
+  <label style="font-weight:400"><input type="radio" name="mode" value="strip"> <code>strip</code> — position (note → LED, piano/instrument)</label>
+
+  <div id="stripcfg" hidden style="margin-top:.6rem">
+    <label for="ledcount">LED count (strip length)</label>
+    <input id="ledcount" type="number" value="144" min="1">
+    <label for="posfn">Position function</label>
+    <select id="posfn">
+      <option value="interpolate">interpolate — note range spread across the strip (melodic / stage)</option>
+      <option value="keymap">keymap — piano-aligned (LEDs per key)</option>
+      <option value="direct">direct — note number = LED index (sequencer)</option>
+    </select>
+    <div class="fnrow" data-fn="interpolate">
+      <label>Note range lo → hi (interpolate)</label>
+      <input id="lo" type="number" value="48" style="width:48%"> <input id="hi" type="number" value="83" style="width:48%">
+    </div>
+    <div class="fnrow" data-fn="keymap" hidden>
+      <label for="lpk">LEDs per key (keymap) — dense strip: length ÷ 88 ≈ 1.6–2.5</label>
+      <input id="lpk" type="number" step="0.1" value="1.6" min="0.1">
+    </div>
+    <label for="firstnote">First note = LED 0 (keymap / direct) — 21 = piano A0</label>
+    <input id="firstnote" type="number" value="21">
+    <label for="stripcol">Colour</label>
+    <input id="stripcol" type="color" value="#ff6400">
+  </div>
+</fieldset>
+
 <div id="status">Idle.</div>
 <div id="log" aria-live="polite"></div>
 
@@ -59,8 +88,12 @@ let pending = null, timer = null;
 function merge(patch) {
   pending = pending || {};
   for (const k in patch) {
-    if (k === "seg" && pending.seg) Object.assign(pending.seg[0], patch.seg[0]);
-    else pending[k] = patch[k];
+    if (k === "seg" && pending.seg) {
+      const ps = pending.seg[0], np = patch.seg[0];
+      const combinedI = (ps.i || []).concat(np.i || []);   // accumulate individual-LED entries (polyphony)
+      Object.assign(ps, np);
+      if (combinedI.length) ps.i = combinedI;
+    } else pending[k] = patch[k];
   }
   if (!timer) timer = setTimeout(flush, 40);
 }
