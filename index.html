@@ -53,8 +53,10 @@
     </div>
     <label for="firstnote">First note = LED 0 (keymap / direct) — 21 = piano A0</label>
     <input id="firstnote" type="number" value="21">
-    <label for="stripcol">Colour</label>
+    <label for="stripcol">Colour (channel 1 / left hand)</label>
     <input id="stripcol" type="color" value="#ff6400">
+    <label for="stripcol2">Right-hand colour (channel ≥ 2, Synthesia-style)</label>
+    <input id="stripcol2" type="color" value="#0078ff">
     <label for="fadems">Note-off fade (ms) — 0 = instant off</label>
     <input id="fadems" type="number" value="250" min="0" step="10">
   </div>
@@ -140,9 +142,9 @@ function stripLeds(note) {
   const i = Math.round((note - lo) / (hi - lo) * (N - 1));
   return (i >= 0 && i < N) ? [i] : [];
 }
-function stripOn(note, vel) {
+function stripOn(note, vel, ch = 1) {
   const leds = stripLeds(note); if (!leds.length) return;
-  const h = $("stripcol").value, s = vel / 127;          // velocity → brightness
+  const h = (ch >= 2 ? $("stripcol2") : $("stripcol")).value, s = vel / 127;   // channel → hand colour; velocity → brightness
   const col = [1, 3, 5].map(o => Math.round(parseInt(h.slice(o, o + 2), 16) * s));
   held[note] = { leds, col };
   for (const idx of leds) fading.delete(idx);            // re-lit: cancel any in-flight fade
@@ -175,7 +177,7 @@ function fadeTick() {
 function onMIDI(e) {
   const [st, d1, d2] = e.data, type = st & 0xF0, ch = (st & 0x0F) + 1;
   if (mode() === "strip") {
-    if (type === 0x90 && d2 > 0) stripOn(d1, d2);
+    if (type === 0x90 && d2 > 0) stripOn(d1, d2, ch);
     else if (type === 0x80 || (type === 0x90 && d2 === 0)) stripOff(d1);
     else if (type === 0xB0 && CC[d1] === "bri") merge({ bri: Math.round(d2 / 127 * 255) });
     return;
