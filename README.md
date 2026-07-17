@@ -43,3 +43,7 @@ today (multi-channel routing on the roadmap). Untested on hardware yet.
 
 *Part of [OpenLamp](https://github.com/openlamp). Not affiliated with or endorsed by the WLED project;
 it talks to WLED over its public local API.*
+
+---
+
+**Two open standards, one bridge.** This implements the open [**wled-midi**](https://github.com/openlamp/wled-midi) convention — the agreed dictionary between [**MIDI**](https://midi.org) (the MIDI Association) and [**WLED**](https://kno.wled.ge). Free for anyone to build on: see the convention's [openness & patent policy](https://github.com/openlamp/wled-midi/blob/main/SPEC.md) (§14) and the [licensing note](https://github.com/openlamp/wled-midi/blob/main/docs/licensing.md). Part of [OpenLamp](https://github.com/openlamp).
